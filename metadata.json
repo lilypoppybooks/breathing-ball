@@ -3,6 +3,6 @@
     "name": "Breathing Ball",
     "description": "Mini breathing tool with calm animation",
     "shell-version": ["46"],
+    "url": "https://github.com/lilypoppybooks/breathing-ball",
     "version": 1
 }
-
