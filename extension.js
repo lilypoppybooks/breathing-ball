@@ -1,166 +1,194 @@
-Engine.IncludeModule("common-api");
+/*
+Name: Breathing Ball
+Author: Felix Lahaie
+Website: https://lily-and-poppy.com
+Description: A desktop tool that minimizes all applications and guides a calm breathing exercise, helping you relax and focus.
+*/
 
-var PetraBot = {};
+import GObject from 'gi://GObject';
+import St from 'gi://St';
+import { Extension } from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import GLib from 'gi://GLib';
+import Clutter from 'gi://Clutter';
 
-PetraBot.PetraBot = function(settings)
-{
-	API3.BaseAI.call(this, settings);
+const Indicator = GObject.registerClass(
+class Indicator extends PanelMenu.Button {
+    _init() {
+        super._init(0.0, 'Breathing Ball');
 
-	this.playedTurn = 0;
-	this.elapsedTime = 0;
+        // Variables internes comme propriétés de la classe
+        this.tube = null;
+        this.ball = null;
+        this.counterLabel = null;
+        this.animationTimeout = null;
+        this.fadeTimeout = null;
+        this.colorAnim = 0;
 
-	this.uniqueIDs = {
-		"armies": 1,	// starts at 1 to allow easier tests on armies ID existence
-		"bases": 1,	// base manager ID starts at one because "0" means "no base" on the map
-		"plans": 0,	// training/building/research plans
-		"transports": 1	// transport plans start at 1 because 0 might be used as none
-	};
+        // Icone smiley
+        this.add_child(new St.Icon({
+            icon_name: 'face-smile-symbolic',
+            style_class: 'system-status-icon',
+        }));
 
-	this.Config = new PetraBot.Config(settings.difficulty, settings.behavior);
+        this.connect('button-press-event', () => {
+            if (!this.ball && !this.counterLabel) {
+                this._startCountdown();
+            } else {
+                this._stopBreathing();
+            }
+        });
+    }
 
-	this.savedEvents = {};
-};
+    _showDesktop() {
+        const workspaceManager = global.workspace_manager;
+        const activeWorkspace = workspaceManager.get_active_workspace();
+        activeWorkspace.list_windows().forEach(win => { if (!win.skip_taskbar) win.minimize(); });
+    }
 
-PetraBot.PetraBot.prototype = Object.create(API3.BaseAI.prototype);
+    _startCountdown() {
+        this._showDesktop();
 
-PetraBot.PetraBot.prototype.CustomInit = function(gameState)
-{
-	if (this.isDeserialized)
-	{
-		// WARNING: the deserializations should not modify the metadatas infos inside their init functions
-		this.turn = this.data.turn;
-		this.playedTurn = this.data.playedTurn;
-		this.elapsedTime = this.data.elapsedTime;
-		this.savedEvents = this.data.savedEvents;
-		for (let key in this.savedEvents)
-		{
-			for (let i in this.savedEvents[key])
-			{
-				if (!this.savedEvents[key][i].entityObj)
-					continue;
-				let evt = this.savedEvents[key][i];
-				let evtmod = {};
-				for (let keyevt in evt)
-				{
-					evtmod[keyevt] = evt[keyevt];
-					evtmod.entityObj = new API3.Entity(gameState.sharedScript, evt.entityObj);
-					this.savedEvents[key][i] = evtmod;
-				}
-			}
-		}
+        const screenWidth = Main.layoutManager.primaryMonitor.width;
+        const screenHeight = Main.layoutManager.primaryMonitor.height;
 
-		this.Config.Deserialize(this.data.config);
+        this.counterLabel = new St.Label({
+            text: '3',
+            style_class: 'countdown-label',
+            opacity: 0,
+        });
+        this.counterLabel.set_position(screenWidth / 2 - 30, screenHeight / 2 - 50);
+        Main.layoutManager.uiGroup.add_child(this.counterLabel);
 
-		this.queueManager = new PetraBot.QueueManager(this.Config, {});
-		this.queueManager.Deserialize(gameState, this.data.queueManager);
-		this.queues = this.queueManager.queues;
+        let count = 3;
+        const fadeTime = 500;
 
-		this.HQ = new PetraBot.HQ(this.Config);
-		this.HQ.init(gameState, this.queues);
-		this.HQ.Deserialize(gameState, this.data.HQ);
+        const showNext = () => {
+            this.counterLabel.set_text(String(count));
+            this.counterLabel.ease({ opacity: 255, duration: fadeTime, mode: Clutter.AnimationMode.EASE_IN_OUT });
 
-		this.uniqueIDs = this.data.uniqueIDs;
-		this.isDeserialized = false;
-		this.data = undefined;
+            if (this.fadeTimeout) GLib.source_remove(this.fadeTimeout);
+            this.fadeTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                this.counterLabel.ease({ opacity: 0, duration: fadeTime, mode: Clutter.AnimationMode.EASE_IN_OUT });
+                count--;
+                if (count > 0) GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeTime, showNext);
+                else GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeTime, () => {
+                    this.counterLabel.destroy();
+                    this.counterLabel = null;
+                    this._createBreathingTool();
+                });
+                return GLib.SOURCE_REMOVE;
+            });
+        };
+        showNext();
+    }
 
-		// initialisation needed after the completion of the deserialization
-		this.HQ.postinit(gameState);
-	}
-	else
-	{
-		this.Config.setConfig(gameState);
+    _createBreathingTool() {
+        const screenWidth = Main.layoutManager.primaryMonitor.width;
+        const screenHeight = Main.layoutManager.primaryMonitor.height;
 
-		// this.queues can only be modified by the queue manager or things will go awry.
-		this.queues = {};
-		for (let i in this.Config.priorities)
-			this.queues[i] = new PetraBot.Queue();
+        const tubeWidth = 50;
+        const tubeHeight = 300;
+        const ballSize = 50;
 
-		this.queueManager = new PetraBot.QueueManager(this.Config, this.queues);
+        this.tube = new St.BoxLayout({ style_class: 'breath-tube', x_expand: false, y_expand: false });
+        this.tube.set_position(screenWidth / 2 - tubeWidth / 2, screenHeight / 2 - tubeHeight / 2);
 
-		this.HQ = new PetraBot.HQ(this.Config);
+        this.ball = new St.BoxLayout({ style_class: 'breath-ball', width: ballSize, height: ballSize, x_expand: false, y_expand: false });
+        const ballX = screenWidth / 2 - ballSize / 2 + 2;
+        const startY = screenHeight / 2 + 2 + tubeHeight / 2 - ballSize - 1;
+        const endY = screenHeight / 2 - tubeHeight / 2 + 2;
 
-		this.HQ.init(gameState, this.queues);
+        this.ball.set_translation(ballX, startY, 0);
+        Main.layoutManager.uiGroup.add_child(this.tube);
+        Main.layoutManager.uiGroup.add_child(this.ball);
 
-		// Analyze our starting position and set a strategy
-		this.HQ.gameAnalysis(gameState);
-	}
-};
+        // Fondue starter
+        this.ball.set_opacity(0);
+        this.tube.set_opacity(0);
+        this.ball.ease({ opacity: 255, duration: 500, mode: Clutter.AnimationMode.EASE_IN_OUT });
+        this.tube.ease({ opacity: 255, duration: 500, mode: Clutter.AnimationMode.EASE_IN_OUT });
 
-PetraBot.PetraBot.prototype.OnUpdate = function(sharedScript)
-{
-	if (this.gameFinished || this.gameState.playerData.state == "defeated")
-		return;
+        // Breathing animation
+        const fps = 60;
+        const frameTime = 1000 / fps;
+        let counter = 0;
 
-	for (let i in this.events)
-	{
-		if (i == "AIMetadata")   // not used inside petra
-			continue;
-		if(this.savedEvents[i] !== undefined)
-			this.savedEvents[i] = this.savedEvents[i].concat(this.events[i]);
-		else
-			this.savedEvents[i] = this.events[i];
-	}
+        const inspFrames = 5 * fps;       // 5 sec inhale
+        const pauseTopFrames = 1 * fps;   // 1 sec pause top
+        const expFrames = 5 * fps;        // 5 sec expiration
+        const pauseBottomFrames = 1 * fps; // 1 sec pause down
+        const totalFrames = inspFrames + pauseTopFrames + expFrames + pauseBottomFrames;
 
-	// Run the update every n turns, offset depending on player ID to balance the load
-	this.elapsedTime = this.gameState.getTimeElapsed() / 1000;
-	if (!this.playedTurn || (this.turn + this.player) % 8 == 5)
-	{
-		Engine.ProfileStart("PetraBot bot (player " + this.player +")");
+        if (this.animationTimeout) GLib.source_remove(this.animationTimeout);
+        this.animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, frameTime, () => {
+            let y, progress;
 
-		this.playedTurn++;
+            if (counter < inspFrames) {
+                progress = counter / inspFrames;
+                progress = 0.5 - 0.5 * Math.cos(Math.PI * progress); // ease-in-out
+                y = startY + (endY - startY) * progress;
+                this.colorAnim = progress;
+            } else if (counter < inspFrames + pauseTopFrames) {
+                y = endY;
+                this.colorAnim = 1;
+            } else if (counter < inspFrames + pauseTopFrames + expFrames) {
+                progress = (counter - inspFrames - pauseTopFrames) / expFrames;
+                progress = 0.5 - 0.5 * Math.cos(Math.PI * progress); // ease-in-out
+                y = endY + (startY - endY) * progress;
+                this.colorAnim = 1 - progress;
+            } else {
+                y = startY;
+                this.colorAnim = 0;
+            }
 
-		if (this.gameState.getOwnEntities().length === 0)
-		{
-			Engine.ProfileStop();
-			return; // With no entities to control the AI cannot do anything
-		}
+            this.ball.set_translation(ballX, y, 0);
 
-		this.HQ.update(this.gameState, this.queues, this.savedEvents);
+            const r = Math.round(255 * this.colorAnim + 79 * (1 - this.colorAnim));
+            const g = Math.round(77 * this.colorAnim + 195 * (1 - this.colorAnim));
+            const b = Math.round(77 * this.colorAnim + 247 * (1 - this.colorAnim));
+            this.ball.set_style(`background-color: rgb(${r},${g},${b});`);
 
-		this.queueManager.update(this.gameState);
+            counter = (counter + 1) % totalFrames;
+            return true;
+        });
+    }
 
-		for (let i in this.savedEvents)
-			this.savedEvents[i] = [];
+    _stopBreathing() {
+        if (this.animationTimeout) GLib.source_remove(this.animationTimeout);
+        this.animationTimeout = null;
 
-		Engine.ProfileStop();
-	}
+        const fadeDuration = 500;
+        if (this.ball) this.ball.ease({ opacity: 0, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_IN_OUT });
+        if (this.tube) this.tube.ease({ opacity: 0, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_IN_OUT });
 
-	this.turn++;
-};
+        if (this.fadeTimeout) GLib.source_remove(this.fadeTimeout);
+        this.fadeTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeDuration, () => {
+            if (this.ball) { this.ball.destroy(); this.ball = null; }
+            if (this.tube) { this.tube.destroy(); this.tube = null; }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
 
-PetraBot.PetraBot.prototype.Serialize = function()
-{
-	let savedEvents = {};
-	for (let key in this.savedEvents)
-	{
-		savedEvents[key] = this.savedEvents[key].slice();
-		for (let i in savedEvents[key])
-		{
-			if (!savedEvents[key][i] || !savedEvents[key][i].entityObj)
-				continue;
-			let evt = savedEvents[key][i];
-			let evtmod = {};
-			for (let keyevt in evt)
-				evtmod[keyevt] = evt[keyevt];
-			evtmod.entityObj = evt.entityObj._entity;
-			savedEvents[key][i] = evtmod;
-		}
-	}
+    destroy() {
+        if (this.animationTimeout) GLib.source_remove(this.animationTimeout);
+        if (this.fadeTimeout) GLib.source_remove(this.fadeTimeout);
+        if (this.ball) this.ball.destroy();
+        if (this.tube) this.tube.destroy();
+        if (this.counterLabel) this.counterLabel.destroy();
+        super.destroy();
+    }
+});
 
-	return {
-		"uniqueIDs": this.uniqueIDs,
-		"turn": this.turn,
-		"playedTurn": this.playedTurn,
-		"elapsedTime": this.elapsedTime,
-		"savedEvents": savedEvents,
-		"config": this.Config.Serialize(),
-		"queueManager": this.queueManager.Serialize(),
-		"HQ": this.HQ.Serialize()
-	};
-};
+export default class BreathingBallExtension extends Extension {
+    enable() {
+        this._indicator = new Indicator();
+        Main.panel.addToStatusArea(this.uuid, this._indicator);
+    }
 
-PetraBot.PetraBot.prototype.Deserialize = function(data, sharedScript)
-{
-	this.isDeserialized = true;
-	this.data = data;
-};
+    destroy() {
+        if (this._indicator) this._indicator.destroy();
+        super.destroy();
+    }
+}
