@@ -68,7 +68,6 @@ class Indicator extends PanelMenu.Button {
             this.counterLabel.set_text(String(count));
             this.counterLabel.ease({ opacity: 255, duration: fadeTime, mode: Clutter.AnimationMode.EASE_IN_OUT });
 
-            if (this.fadeTimeout) GLib.source_remove(this.fadeTimeout);
             this.fadeTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
                 this.counterLabel.ease({ opacity: 0, duration: fadeTime, mode: Clutter.AnimationMode.EASE_IN_OUT });
                 count--;
@@ -121,7 +120,6 @@ class Indicator extends PanelMenu.Button {
         const pauseBottomFrames = 1 * fps; // 1 sec pause down
         const totalFrames = inspFrames + pauseTopFrames + expFrames + pauseBottomFrames;
 
-        if (this.animationTimeout) GLib.source_remove(this.animationTimeout);
         this.animationTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, frameTime, () => {
             let y, progress;
 
@@ -163,7 +161,6 @@ class Indicator extends PanelMenu.Button {
         if (this.ball) this.ball.ease({ opacity: 0, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_IN_OUT });
         if (this.tube) this.tube.ease({ opacity: 0, duration: fadeDuration, mode: Clutter.AnimationMode.EASE_IN_OUT });
 
-        if (this.fadeTimeout) GLib.source_remove(this.fadeTimeout);
         this.fadeTimeout = GLib.timeout_add(GLib.PRIORITY_DEFAULT, fadeDuration, () => {
             if (this.ball) { this.ball.destroy(); this.ball = null; }
             if (this.tube) { this.tube.destroy(); this.tube = null; }
@@ -187,8 +184,8 @@ export default class BreathingBallExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
-    destroy() {
+    disable() {
         if (this._indicator) this._indicator.destroy();
-        super.destroy();
+        this._indicator = null;
     }
 }
